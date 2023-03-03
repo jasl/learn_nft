@@ -21,31 +21,33 @@ macro_rules! log {
 	};
 }
 
-use frame_support::traits::Currency;
+use frame_support::{
+	traits::{
+		tokens::nonfungibles_v2::{self, *},
+		Currency, ReservableCurrency,
+	},
+};
 use pallet_nfts::{
 	MintType, CollectionSettings, CollectionSetting, ItemSettings, ItemSetting,
-	ItemConfig,
-	Incrementable,
+	ItemConfig
 };
 
-pub type BalanceOf<T, I = ()> =
-	<<T as pallet_nfts::Config<I>>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
+pub(crate) type BalanceOf<T> =
+	<<T as Config>::Currency as Currency<<T as frame_system::Config>::AccountId>>::Balance;
 
-pub type CollectionIdOf<T, I = ()> = <T as pallet_nfts::Config<I>>::CollectionId;
-pub type ItemIdOf<T, I = ()> = <T as pallet_nfts::Config<I>>::ItemId;
-pub type CollectionDepositOf<T, I = ()> = <T as pallet_nfts::Config<I>>::CollectionDeposit;
-pub type CollectionConfigOf<T, I = ()> = pallet_nfts::CollectionConfig<
-	BalanceOf<T, I>,
-	<T as frame_system::Config>::BlockNumber,
-	CollectionIdOf<T, I>
->;
-pub type MintSettingsOf<T, I = ()> = pallet_nfts::MintSettings<
-	BalanceOf<T, I>,
-	<T as frame_system::Config>::BlockNumber,
-	CollectionIdOf<T, I>
->;
+pub(crate) type CollectionIdOf<T> =
+	<<T as Config>::NFTCollection as nonfungibles_v2::Inspect<<T as frame_system::Config>::AccountId>>::CollectionId;
 
-pub type PalletNFT<T, I = ()> = pallet_nfts::Pallet<T, I>;
+pub(crate) type CollectionConfigOf<T> = pallet_nfts::CollectionConfig<
+	BalanceOf<T>,
+	<T as frame_system::Config>::BlockNumber,
+	CollectionIdOf<T>
+>;
+pub(crate) type MintSettingsOf<T> = pallet_nfts::MintSettings<
+	BalanceOf<T>,
+	<T as frame_system::Config>::BlockNumber,
+	CollectionIdOf<T>
+>;
 
 #[frame_support::pallet]
 pub mod pallet {
@@ -59,39 +61,45 @@ pub mod pallet {
 	#[pallet::pallet]
 	#[pallet::generate_store(pub(super) trait Store)]
 	#[pallet::storage_version(STORAGE_VERSION)]
-	pub struct Pallet<T, I = ()>(_);
+	pub struct Pallet<T>(_);
 
 	/// Configure the pallet by specifying the parameters and types on which it depends.
 	#[pallet::config]
-	pub trait Config<I: 'static = ()>: frame_system::Config + pallet_nfts::Config<I> {
+	pub trait Config: frame_system::Config {
 		/// Because this pallet emits events, it depends on the runtime definition of an event.
-		type RuntimeEvent: From<Event<Self, I>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
+		type RuntimeEvent: From<Event<Self>> + IsType<<Self as frame_system::Config>::RuntimeEvent>;
+
+		/// The system's currency for payment.
+		type Currency: ReservableCurrency<Self::AccountId>;
+
+		type NFTCollection: nonfungibles_v2::Create<Self::AccountId, CollectionConfigOf<Self>> +
+							nonfungibles_v2::Destroy<Self::AccountId> +
+							nonfungibles_v2::Mutate<Self::AccountId, ItemConfig>;
 	}
 
 	#[pallet::event]
 	#[pallet::generate_deposit(pub(super) fn deposit_event)]
-	pub enum Event<T: Config<I>, I: 'static = ()> {
-		CollectionCreated { worker: T::AccountId, collection_id: CollectionIdOf<T, I> },
+	pub enum Event<T: Config> {
+		CollectionCreated { who: T::AccountId, collection_id: CollectionIdOf<T> },
 	}
 
 	// Errors inform users that something went wrong.
 	#[pallet::error]
-	pub enum Error<T, I = ()> {
+	pub enum Error<T> {
 		NotTheOwner,
 		WorkerNotExists,
 	}
 
 	#[pallet::call]
-	impl<T: Config<I>, I: 'static> Pallet<T, I> {
+	impl<T: Config> Pallet<T> {
 		#[pallet::call_index(0)]
 		#[pallet::weight(0)]
 		pub fn create_collection(
-			origin: OriginFor<T>,
-			worker: T::AccountId
+			origin: OriginFor<T>
 		) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 
-			let collection_config = CollectionConfigOf::<T, I> {
+			let collection_config = CollectionConfigOf::<T> {
 				settings: CollectionSettings::from_disabled(
 					CollectionSetting::TransferableItems |
 						CollectionSetting::UnlockedMetadata |
@@ -99,7 +107,7 @@ pub mod pallet {
 						CollectionSetting::UnlockedMaxSupply
 				),
 				max_supply: None,
-				mint_settings: MintSettingsOf::<T, I> {
+				mint_settings: MintSettingsOf::<T> {
 					mint_type: MintType::Public,
 					price: None,
 					start_block: None,
@@ -112,105 +120,30 @@ pub mod pallet {
 				}
 			};
 
-			let collection =
-				pallet_nfts::NextCollectionId::<T, I>::get().unwrap_or(CollectionIdOf::<T, I>::initial_value());
+			let collection_id =
+				T::NFTCollection::create_collection(&who, &who, &collection_config)?;
+			// TODO: add a mapping
 
-			pallet_nfts::Pallet::<T, I>::do_create_collection(
-				collection,
-				who.clone(),
-				who.clone(),
-				collection_config,
-				CollectionDepositOf::<T, I>::get(),
-				pallet_nfts::Event::<T, I>::Created { collection, creator: who.clone(), owner: who.clone() },
-			)?;
+			// TODO: CollectionId need Debug and Clone, need PR to Substrate
+			Self::deposit_event(Event::CollectionCreated { who: who.clone(), collection_id });
 
 			Ok(())
 		}
-
 		#[pallet::call_index(1)]
 		#[pallet::weight(0)]
 		pub fn mint(
 			origin: OriginFor<T>,
-			collection_id: CollectionIdOf<T, I>
+			collection: CollectionIdOf<T>
 		) -> DispatchResult {
 			let who = ensure_signed(origin)?;
 
-			// let item_id: ItemIdOf<T, I> = 0u32;
-			let item_config = ItemConfig {
-				settings: ItemSettings::from_disabled(
-					ItemSetting::Transferable | ItemSetting::UnlockedMetadata
-				)
-			};
-
-			pallet_nfts::Pallet::<T, I>::do_mint(
-				collection_id,
-				0u32.into(),
-				Some(who.clone()),
-				who.clone(),
-				item_config,
-				|collection_details, collection_config| {
-					// // Issuer can mint regardless of mint settings
-					// if Self::has_role(&collection, &caller, CollectionRole::Issuer) {
-					// 	return Ok(())
-					// }
-					//
-					// let mint_settings = collection_config.mint_settings;
-					// let now = frame_system::Pallet::<T>::block_number();
-					//
-					// if let Some(start_block) = mint_settings.start_block {
-					// 	ensure!(start_block <= now, Error::<T, I>::MintNotStarted);
-					// }
-					// if let Some(end_block) = mint_settings.end_block {
-					// 	ensure!(end_block >= now, Error::<T, I>::MintEnded);
-					// }
-					//
-					// match mint_settings.mint_type {
-					// 	MintType::Issuer => return Err(Error::<T, I>::NoPermission.into()),
-					// 	MintType::HolderOf(collection_id) => {
-					// 		let MintWitness { owner_of_item } =
-					// 			witness_data.ok_or(Error::<T, I>::BadWitness)?;
-					//
-					// 		let has_item = Account::<T, I>::contains_key((
-					// 			&caller,
-					// 			&collection_id,
-					// 			&owner_of_item,
-					// 		));
-					// 		ensure!(has_item, Error::<T, I>::BadWitness);
-					//
-					// 		let attribute_key = Self::construct_attribute_key(
-					// 			PalletAttributes::<T::CollectionId>::UsedToClaim(collection)
-					// 				.encode(),
-					// 		)?;
-					//
-					// 		let key = (
-					// 			&collection_id,
-					// 			Some(owner_of_item),
-					// 			AttributeNamespace::Pallet,
-					// 			&attribute_key,
-					// 		);
-					// 		let already_claimed = Attribute::<T, I>::contains_key(key.clone());
-					// 		ensure!(!already_claimed, Error::<T, I>::AlreadyClaimed);
-					//
-					// 		let value = Self::construct_attribute_value(vec![0])?;
-					// 		Attribute::<T, I>::insert(
-					// 			key,
-					// 			(value, AttributeDeposit { account: None, amount: Zero::zero() }),
-					// 		);
-					// 	},
-					// 	_ => {},
-					// }
-
-					// if let Some(price) = mint_settings.price {
-					// 	T::Currency::transfer(
-					// 		&caller,
-					// 		&collection_details.owner,
-					// 		price,
-					// 		ExistenceRequirement::KeepAlive,
-					// 	)?;
-					// }
-
-					Ok(())
-				},
+			let config = ItemConfig::default();
+			T::NFTCollection::mint_into(
+				collection,
+				1u32.into(),
+				&who,
+				&config,
+				false,
 			)?;
 
 			Ok(())

@@ -128,6 +128,8 @@ impl pallet_nfts::Config for Test {
 
 impl pallet_nft_computing::Config for Test {
 	type RuntimeEvent = RuntimeEvent;
+	type Currency = Balances;
+	type NFTCollection = Nfts;
 }
 
 // Build genesis storage according to the mock runtime.

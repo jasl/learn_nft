@@ -17,6 +17,7 @@ scale-info = { version = "2.3.1", default-features = false, features = ["derive"
 
 frame-support = { git = "https://github.com/paritytech/substrate", branch = "master", default-features = false }
 frame-system = { git = "https://github.com/paritytech/substrate", branch = "master", default-features = false }
+pallet-balances = { git = "https://github.com/paritytech/substrate", branch = "master", default-features = false }
 pallet-nfts = { git = "https://github.com/paritytech/substrate", branch = "master", default-features = false }
 
 [dev-dependencies]
@@ -25,7 +26,6 @@ sp-io = { git = "https://github.com/paritytech/substrate", branch = "master" }
 sp-runtime = { git = "https://github.com/paritytech/substrate", branch = "master" }
 
 pallet-timestamp = { git = "https://github.com/paritytech/substrate", branch = "master" }
-pallet-balances = { git = "https://github.com/paritytech/substrate", branch = "master" }
 pallet-insecure-randomness-collective-flip = { git = "https://github.com/paritytech/substrate", branch = "master" }
 
 [features]
@@ -36,9 +36,11 @@ std = [
 	"scale-info/std",
 	"frame-support/std",
 	"frame-system/std",
+	"pallet-balances/std",
 	"pallet-nfts/std",
 ]
 try-runtime = [
 	"frame-support/try-runtime",
+	"pallet-balances/try-runtime",
 	"pallet-nfts/try-runtime",
 ]
